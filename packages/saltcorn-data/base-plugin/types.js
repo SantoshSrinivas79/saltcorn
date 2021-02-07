@@ -7,8 +7,10 @@ const {
   div,
   h3,
   a,
+  i,
   button,
   textarea,
+  span,
   text_attr,
 } = require("@saltcorn/markup/tags");
 const { contract, is } = require("contractis");
@@ -29,7 +31,23 @@ const string = {
   name: "String",
   sql_name: "text",
   attributes: [
-    //{ name: "match", type: "String", required: false },
+    {
+      name: "regexp",
+      type: "String",
+      required: false,
+      sublabel: "Match regular expression",
+      validator(s) {
+        if (!is_valid_regexp(s)) return "Not a valid Regular Expression";
+      },
+    },
+    {
+      name: "re_invalid_error",
+      type: "String",
+      required: false,
+      sublabel: "Error message when regular expression does not match",
+    },
+    { name: "max_length", type: "Integer", required: false },
+    { name: "min_length", type: "Integer", required: false },
     {
       name: "options",
       type: "String",
@@ -45,17 +63,28 @@ const string = {
       ? is.str
       : is.one_of(options.map((o) => o.name)),
   fieldviews: {
-    as_text: { isEdit: false, run: (s) => text(s) },
-    as_link: { isEdit: false, run: (s) => a({ href: text(s) }, text(s)) },
-    as_header: { isEdit: false, run: (s) => h3(text(s)) },
+    as_text: { isEdit: false, run: (s) => text_attr(s || "") },
+    as_link: {
+      isEdit: false,
+      run: (s) => a({ href: text(s || "") }, text_attr(s || "")),
+    },
+    as_header: { isEdit: false, run: (s) => h3(text_attr(s || "")) },
     edit: {
       isEdit: true,
-      run: (nm, v, attrs, cls, required) =>
+      configFields: [
+        {
+          name: "placeholder",
+          label: "Placeholder",
+          type: "String",
+        },
+      ],
+      run: (nm, v, attrs, cls, required, field) =>
         attrs.options
           ? select(
               {
                 class: ["form-control", cls],
                 name: text_attr(nm),
+                "data-fieldname": text_attr(field.name),
                 id: `input${text_attr(nm)}`,
                 disabled: attrs.disabled,
               },
@@ -72,6 +101,7 @@ const string = {
                 class: ["form-control", cls],
                 name: text_attr(nm),
                 disabled: attrs.disabled,
+                "data-fieldname": text_attr(field.name),
                 id: `input${text_attr(nm)}`,
                 "data-selected": v,
                 "data-calc-options": encodeURIComponent(
@@ -84,6 +114,8 @@ const string = {
               type: "text",
               disabled: attrs.disabled,
               class: ["form-control", cls],
+              placeholder: attrs.placeholder,
+              "data-fieldname": text_attr(field.name),
               name: text_attr(nm),
               id: `input${text_attr(nm)}`,
               ...(isdef(v) && { value: text_attr(v) }),
@@ -91,30 +123,69 @@ const string = {
     },
     textarea: {
       isEdit: true,
-      run: (nm, v, attrs, cls) =>
+      run: (nm, v, attrs, cls, required, field) =>
         textarea(
           {
             class: ["form-control", cls],
             name: text_attr(nm),
+            "data-fieldname": text_attr(field.name),
             disabled: attrs.disabled,
             id: `input${text_attr(nm)}`,
-            rows: 10,
+            rows: 5,
           },
           text(v) || ""
         ),
+    },
+    password: {
+      isEdit: true,
+      run: (nm, v, attrs, cls, required, field) =>
+        input({
+          type: "password",
+          disabled: attrs.disabled,
+          class: ["form-control", cls],
+          "data-fieldname": text_attr(field.name),
+
+          name: text_attr(nm),
+          id: `input${text_attr(nm)}`,
+          ...(isdef(v) && { value: text_attr(v) }),
+        }),
     },
   },
   read: (v) => {
     switch (typeof v) {
       case "string":
-        return v;
+        //PG dislikes null bytes
+        return v.replace(/\0/g, "");
       default:
         return undefined;
     }
   },
-  validate: () => (x) => true,
+  presets: {
+    IP: ({ req }) => req.ip,
+    SessionID: ({ req }) => req.sessionID,
+  },
+  validate: ({ min_length, max_length, regexp, re_invalid_error }) => (x) => {
+    if (!x || typeof x !== "string") return true; //{ error: "Not a string" };
+    if (isdef(min_length) && x.length < min_length)
+      return { error: `Must be at least ${min_length} characters` };
+    if (isdef(max_length) && x.length > max_length)
+      return { error: `Must be at most ${max_length} characters` };
+    if (isdef(regexp) && !new RegExp(regexp).test(x))
+      return { error: re_invalid_error || `Does not match regular expression` };
+    return true;
+  },
+  validate_attributes: ({ min_length, max_length, regexp }) =>
+    (!isdef(min_length) || !isdef(max_length) || max_length >= min_length) &&
+    (!isdef(regexp) || is_valid_regexp(regexp)),
 };
-
+const is_valid_regexp = (s) => {
+  try {
+    new RegExp(s);
+    return true;
+  } catch {
+    return false;
+  }
+};
 const int = {
   name: "Integer",
   sql_name: "int",
@@ -123,11 +194,12 @@ const int = {
     show: { isEdit: false, run: (s) => text(s) },
     edit: {
       isEdit: true,
-      run: (nm, v, attrs, cls) =>
+      run: (nm, v, attrs, cls, required, field) =>
         input({
           type: "number",
           class: ["form-control", cls],
           disabled: attrs.disabled,
+          "data-fieldname": text_attr(field.name),
           name: text_attr(nm),
           id: `input${text_attr(nm)}`,
           step: "1",
@@ -178,11 +250,12 @@ const color = {
     },
     edit: {
       isEdit: true,
-      run: (nm, v, attrs, cls) =>
+      run: (nm, v, attrs, cls, required, field) =>
         input({
           type: "color",
           class: ["form-control", cls],
           disabled: attrs.disabled,
+          "data-fieldname": text_attr(field.name),
           name: text_attr(nm),
           id: `input${text_attr(nm)}`,
           ...(isdef(v) && { value: text_attr(v) }),
@@ -211,11 +284,12 @@ const float = {
     show: { isEdit: false, run: (s) => text(s) },
     edit: {
       isEdit: true,
-      run: (nm, v, attrs, cls) =>
+      run: (nm, v, attrs, cls, required, field) =>
         input({
           type: "number",
           class: ["form-control", cls],
           name: text_attr(nm),
+          "data-fieldname": text_attr(field.name),
           disabled: attrs.disabled,
           step: attrs.decimal_places
             ? Math.pow(10, -attrs.decimal_places)
@@ -250,6 +324,15 @@ const float = {
     return true;
   },
 };
+const locale = (req) => {
+  //console.log(req && req.getLocale ? req.getLocale() : undefined);
+  return req && req.getLocale ? req.getLocale() : undefined;
+};
+
+const logit = (x) => {
+  console.log(x);
+  return x;
+};
 
 const date = {
   name: "Date",
@@ -259,27 +342,82 @@ const date = {
   fieldviews: {
     show: {
       isEdit: false,
-      run: (d) =>
+      run: (d, req) =>
         text(
           typeof d === "string"
             ? text(d)
-            : d && d.toISOString
-            ? d.toISOString()
+            : d && d.toLocaleString
+            ? d.toLocaleString(locale(req))
             : ""
         ),
     },
-    relative: { isEdit: false, run: (d) => text(moment(d).fromNow()) },
+    showDay: {
+      isEdit: false,
+      run: (d, req) =>
+        text(
+          typeof d === "string"
+            ? text(d)
+            : d && d.toLocaleDateString
+            ? d.toLocaleDateString(locale(req))
+            : ""
+        ),
+    },
+    format: {
+      isEdit: false,
+      configFields: [
+        {
+          name: "format",
+          label: "Format",
+          type: "String",
+          sublabel: "moment.js format specifier",
+        },
+      ],
+      run: (d, req, options) => {
+        if (!d) return "";
+        if (!options || !options.format) return text(moment(d).format());
+        return text(moment(d).format(options.format));
+      },
+    },
+    relative: {
+      isEdit: false,
+      run: (d, req) => {
+        if (!d) return "";
+        const loc = locale(req);
+        if (loc) return text(moment(d).locale(loc).fromNow());
+        else return text(moment(d).fromNow());
+      },
+    },
     edit: {
       isEdit: true,
-      run: (nm, v, attrs, cls) =>
+      run: (nm, v, attrs, cls, required, field) =>
         input({
           type: "text",
           class: ["form-control", cls],
+          "data-fieldname": text_attr(field.name),
           name: text_attr(nm),
           disabled: attrs.disabled,
           id: `input${text_attr(nm)}`,
           ...(isdef(v) && {
-            value: text_attr(typeof v === "string" ? v : v.toISOString()),
+            value: text_attr(
+              typeof v === "string" ? v : v.toLocaleString(attrs.locale)
+            ),
+          }),
+        }),
+    },
+    editDay: {
+      isEdit: true,
+      run: (nm, v, attrs, cls, required, field) =>
+        input({
+          type: "text",
+          class: ["form-control", cls],
+          "data-fieldname": text_attr(field.name),
+          name: text_attr(nm),
+          disabled: attrs.disabled,
+          id: `input${text_attr(nm)}`,
+          ...(isdef(v) && {
+            value: text_attr(
+              typeof v === "string" ? v : v.toLocaleDateString(attrs.locale)
+            ),
           }),
         }),
     },
@@ -287,10 +425,13 @@ const date = {
   presets: {
     Now: () => new Date(),
   },
-  read: (v) => {
+  read: (v, attrs) => {
     if (v instanceof Date && !isNaN(v)) return v;
-
     if (typeof v === "string") {
+      if (attrs && attrs.locale) {
+        const d = moment(v, "L LT", attrs.locale).toDate();
+        if (d instanceof Date && !isNaN(d)) return d;
+      }
       const d = new Date(v);
       if (d instanceof Date && !isNaN(d)) return d;
       else return null;
@@ -306,13 +447,36 @@ const bool = {
   fieldviews: {
     show: {
       isEdit: false,
+      run: (v) =>
+        v === true
+          ? i({
+              class: "fas fa-lg fa-check-circle text-success",
+            })
+          : v === false
+          ? i({
+              class: "fas fa-lg fa-times-circle text-danger",
+            })
+          : "",
+    },
+    checkboxes: {
+      isEdit: false,
+      run: (v) =>
+        v === true
+          ? input({ disabled: true, type: "checkbox", checked: true })
+          : v === false
+          ? input({ type: "checkbox", disabled: true })
+          : "",
+    },
+    TrueFalse: {
+      isEdit: false,
       run: (v) => (v === true ? "True" : v === false ? "False" : ""),
     },
     edit: {
       isEdit: true,
-      run: (nm, v, attrs, cls) =>
+      run: (nm, v, attrs, cls, required, field) =>
         input({
           class: ["form-check-input", cls],
+          "data-fieldname": text_attr(field.name),
           type: "checkbox",
           disabled: attrs.disabled,
           name: text_attr(nm),
@@ -322,7 +486,7 @@ const bool = {
     },
     tristate: {
       isEdit: true,
-      run: (nm, v, attrs, cls) =>
+      run: (nm, v, attrs, cls, required, field) =>
         attrs.disabled
           ? !(!isdef(v) || v === null)
             ? ""
@@ -331,6 +495,7 @@ const bool = {
             : "F"
           : input({
               type: "hidden",
+              "data-fieldname": text_attr(field.name),
               name: text_attr(nm),
               id: `input${text_attr(nm)}`,
               value: !isdef(v) || v === null ? "?" : v ? "on" : "off",

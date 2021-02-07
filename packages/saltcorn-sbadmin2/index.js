@@ -28,6 +28,7 @@ const subItem = (currentUrl) => (item) =>
           class: ["collapse-item", active(currentUrl, item) && "active"],
           href: text(item.link),
         },
+        item.icon ? i({ class: `fa-fw mr-05 ${item.icon}` }) : "",
         item.label
       )
     : h6({ class: "collapse-header" }, item.label);
@@ -41,16 +42,19 @@ const logit = (x, s) => {
 };
 const active = (currentUrl, item) =>
   (item.link && currentUrl.startsWith(item.link)) ||
+  (item.altlinks && item.altlinks.some((l) => currentUrl.startsWith(l))) ||
   (item.subitems &&
-    item.subitems.some((si) => si.link && currentUrl.startsWith(si.link)));
+    item.subitems.some(
+      (si) =>
+        (si.link && currentUrl.startsWith(si.link)) ||
+        (si.altlinks && si.altlinks.some((l) => currentUrl.startsWith(l)))
+    ));
 
 const sideBarItem = (currentUrl) => (item) => {
   const is_active = active(currentUrl, item);
   return li(
     { class: ["nav-item", is_active && "active"] },
-    item.link
-      ? a({ class: "nav-link", href: text(item.link) }, span(text(item.label)))
-      : item.subitems
+    item.subitems
       ? [
           a(
             {
@@ -61,7 +65,7 @@ const sideBarItem = (currentUrl) => (item) => {
               "aria-expanded": "true",
               "aria-controls": `collapse${labelToId(item)}`,
             },
-            //i({ class: "fas fa-fw fa-wrench" }),
+            item.icon ? i({ class: `fa-fw ${item.icon}` }) : "",
             span(text(item.label))
           ),
           div(
@@ -76,6 +80,12 @@ const sideBarItem = (currentUrl) => (item) => {
             )
           ),
         ]
+      : item.link
+      ? a(
+          { class: "nav-link", href: text(item.link) },
+          item.icon ? i({ class: `fa-fw ${item.icon}` }) : "",
+          span(text(item.label))
+        )
       : span({ class: "nav-link" }, text(item.label))
   );
 };
@@ -90,7 +100,8 @@ const sideBarSection = (currentUrl) => (section) => [
 const sidebar = (brand, sections, currentUrl) =>
   ul(
     {
-      class: "navbar-nav bg-gradient-primary sidebar sidebar-dark accordion",
+      class:
+        "navbar-nav bg-gradient-primary sidebar sidebar-dark accordion d-print-none",
       id: "accordionSidebar",
     },
     a(
@@ -152,9 +163,10 @@ const blockDispatch = {
       )
     ),
 };
-const renderBody = (title, body) =>
+const renderBody = (title, body, role) =>
   renderLayout({
     blockDispatch,
+    role,
     layout:
       typeof body === "string" ? { type: "card", title, contents: body } : body,
   });
@@ -166,9 +178,22 @@ const renderAuthLinks = (authLinks) => {
   if (authLinks.forgot) links.push(link(authLinks.forgot, "Forgot password?"));
   if (authLinks.signup)
     links.push(link(authLinks.signup, "Create an account!"));
-  if (links.length === 0) return "";
+  const meth_links = (authLinks.methods || [])
+    .map(({ url, icon, label }) =>
+      a(
+        { href: url, class: "btn btn-secondary btn-user btn-block" },
+        icon || "",
+        `&nbsp;Login with ${label}`
+      )
+    )
+    .join("");
+  if (links.length === 0) return hr() + meth_links;
   else
-    return hr() + links.map((l) => div({ class: "text-center" }, l)).join("");
+    return (
+      hr() +
+      (meth_links ? meth_links + hr() : "") +
+      links.map((l) => div({ class: "text-center" }, l)).join("")
+    );
 };
 
 const formModify = (form) => {
@@ -185,12 +210,11 @@ const wrapIt = (headers, title, bodyAttr, rest) =>
     <meta charset="utf-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-
-    <link href="https://cdn.jsdelivr.net/npm/startbootstrap-sb-admin-2@4.0.7/vendor/fontawesome-free/css/all.min.css" rel="stylesheet" type="text/css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/startbootstrap-sb-admin-2@4.1.3/vendor/fontawesome-free/css/all.min.css" integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU=" crossorigin="anonymous">
     <link href="https://fonts.googleapis.com/css?family=Nunito:200,200i,300,300i,400,400i,600,600i,700,700i,800,800i,900,900i" rel="stylesheet">
 
     <!-- Custom styles for this template-->
-    <link href="https://cdn.jsdelivr.net/npm/startbootstrap-sb-admin-2@4.0.7/css/sb-admin-2.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/startbootstrap-sb-admin-2@4.1.3/css/sb-admin-2.min.css" integrity="sha256-YAjjk/fYhP2bZUoaAEYJ+2d3EHBylYEgj9TomVgBjyg=" crossorigin="anonymous">
     ${headersInHead(headers)}
     <title>${text(title)}</title>
   </head>
@@ -199,9 +223,9 @@ const wrapIt = (headers, title, bodyAttr, rest) =>
     <script src="https://code.jquery.com/jquery-3.4.1.min.js" 
             integrity="sha256-CSXorXvZcTkaix6Yvo6HppcZGetbYMGWSFlBw8HfCJo=" 
             crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/startbootstrap-sb-admin-2@4.0.7/vendor/bootstrap/js/bootstrap.bundle.min.js" integrity="sha256-fzFFyH01cBVPYzl16KT40wqjhgPtq6FFUB6ckN2+GGw=" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/startbootstrap-sb-admin-2@4.0.7/vendor/jquery-easing/jquery.easing.min.js" integrity="sha256-H3cjtrm/ztDeuhCN9I4yh4iN2Ybx/y1RM7rMmAesA0k=" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/startbootstrap-sb-admin-2@4.0.7/js/sb-admin-2.min.js" integrity="sha256-tCfY819ixSSCdfJ1UH/P8fV9/PdD2aldEgg6Te0HaOU=" crossorigin="anonymous"></script>
+            <script src="https://cdn.jsdelivr.net/npm/startbootstrap-sb-admin-2@4.1.3/vendor/bootstrap/js/bootstrap.bundle.min.js" integrity="sha256-jXCJJT3KKcnNjZ3rfsabCj1EX4j2omR4xxm+H5CtywE=" crossorigin="anonymous"></script>
+            <script src="https://cdn.jsdelivr.net/npm/startbootstrap-sb-admin-2@4.1.3/vendor/jquery-easing/jquery.easing.min.js" integrity="sha256-H3cjtrm/ztDeuhCN9I4yh4iN2Ybx/y1RM7rMmAesA0k=" crossorigin="anonymous"></script>
+            <script src="https://cdn.jsdelivr.net/npm/startbootstrap-sb-admin-2@4.1.3/js/sb-admin-2.min.js" integrity="sha256-r6sYyPtYgtQcqf6OI1p+jx79L02Y5MVHGW6llKY24sI=" crossorigin="anonymous"></script>
     ${headersInBody(headers)}
     </body>
   </html>`;
@@ -244,7 +268,16 @@ const authWrap = ({
     </div>`
   );
 
-const wrap = ({ title, menu, brand, alerts, currentUrl, body, headers }) =>
+const wrap = ({
+  title,
+  menu,
+  brand,
+  alerts,
+  currentUrl,
+  body,
+  headers,
+  role,
+}) =>
   wrapIt(
     headers,
     title,
@@ -255,8 +288,10 @@ const wrap = ({ title, menu, brand, alerts, currentUrl, body, headers }) =>
       <div id="content-wrapper" class="d-flex flex-column">
         <div id="content">
           <div class="container-fluid">
-            ${alerts.map((a) => alert(a.type, a.msg)).join("")}
-            ${renderBody(title, body)}
+            <div id="alerts-area">
+              ${alerts.map((a) => alert(a.type, a.msg)).join("")}
+            </div>
+            ${renderBody(title, body, role)}
           </div>
         </div>
       </div>

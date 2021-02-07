@@ -8,6 +8,7 @@ const {
   post_delete_btn,
   post_dropdown_item,
   renderBuilder,
+  settingsDropdown,
 } = require("@saltcorn/markup");
 const {
   span,
@@ -18,6 +19,7 @@ const {
   a,
   div,
   button,
+  text,
 } = require("@saltcorn/markup/tags");
 
 const { getState } = require("@saltcorn/data/db/state");
@@ -28,63 +30,48 @@ const Table = require("@saltcorn/data/models/table");
 const View = require("@saltcorn/data/models/view");
 const Workflow = require("@saltcorn/data/models/workflow");
 const User = require("@saltcorn/data/models/user");
+const Page = require("@saltcorn/data/models/page");
+
 const { add_to_menu } = require("@saltcorn/data/models/pack");
 
 const router = new Router();
 module.exports = router;
 
 const view_dropdown = (view, req) =>
-  div(
-    { class: "dropdown" },
-    button(
+  settingsDropdown(`dropdownMenuButton${view.id}`, [
+    a(
       {
-        class: "btn btn-outline-secondary",
-        "data-boundary": "viewport",
-        type: "button",
-        id: `dropdownMenuButton${view.id}`,
-        "data-toggle": "dropdown",
-        "aria-haspopup": "true",
-        "aria-expanded": "false",
+        class: "dropdown-item",
+        href: `/view/${encodeURIComponent(view.name)}`,
       },
-      '<i class="fas fa-ellipsis-h"></i>'
+      '<i class="fas fa-running"></i>&nbsp;' + req.__("Run")
     ),
-    div(
+    a(
       {
-        class: "dropdown-menu dropdown-menu-right",
-        "aria-labelledby": `dropdownMenuButton${view.id}`,
-      }, // clone
-      a(
-        {
-          class: "dropdown-item",
-          href: `/view/${encodeURIComponent(view.name)}`,
-        },
-        '<i class="fas fa-running"></i>&nbsp;' + req.__("Run")
-      ),
-      a(
-        {
-          class: "dropdown-item",
-          href: `/viewedit/edit/${encodeURIComponent(view.name)}`,
-        },
-        '<i class="fas fa-edit"></i>&nbsp;' + req.__("Edit")
-      ),
-      post_dropdown_item(
-        `/viewedit/add-to-menu/${view.id}`,
-        '<i class="fas fa-bars"></i>&nbsp;' + req.__("Add to menu"),
-        req.csrfToken()
-      ),
-      post_dropdown_item(
-        `/viewedit/clone/${view.id}`,
-        '<i class="far fa-copy"></i>&nbsp;' + req.__("Duplicate"),
-        req.csrfToken()
-      ),
-      div({ class: "dropdown-divider" }),
-      post_dropdown_item(
-        `/viewedit/delete/${view.id}`,
-        '<i class="far fa-trash-alt"></i>&nbsp;' + req.__("Delete"),
-        req.csrfToken()
-      )
-    )
-  );
+        class: "dropdown-item",
+        href: `/viewedit/edit/${encodeURIComponent(view.name)}`,
+      },
+      '<i class="fas fa-edit"></i>&nbsp;' + req.__("Edit")
+    ),
+    post_dropdown_item(
+      `/viewedit/add-to-menu/${view.id}`,
+      '<i class="fas fa-bars"></i>&nbsp;' + req.__("Add to menu"),
+      req
+    ),
+    post_dropdown_item(
+      `/viewedit/clone/${view.id}`,
+      '<i class="far fa-copy"></i>&nbsp;' + req.__("Duplicate"),
+      req
+    ),
+    div({ class: "dropdown-divider" }),
+    post_dropdown_item(
+      `/viewedit/delete/${view.id}`,
+      '<i class="far fa-trash-alt"></i>&nbsp;' + req.__("Delete"),
+      req,
+      true,
+      view.name
+    ),
+  ]);
 router.get(
   "/",
   setTenant,
@@ -170,7 +157,10 @@ router.get(
   })
 );
 
-const viewForm = (req, tableOptions, roles, values) => {
+const mapObjectValues = (o, f) =>
+  Object.fromEntries(Object.entries(o).map(([k, v]) => [k, f(v)]));
+
+const viewForm = (req, tableOptions, roles, pages, values) => {
   const isEdit =
     values && values.id && !getState().getConfig("development_mode", false);
   return new Form({
@@ -192,6 +182,12 @@ const viewForm = (req, tableOptions, roles, values) => {
         input_type: "select",
         sublabel: req.__("Views are based on a view template"),
         options: Object.keys(getState().viewtemplates),
+        attributes: {
+          explainers: mapObjectValues(
+            getState().viewtemplates,
+            ({ description }) => description
+          ),
+        },
         disabled: isEdit,
       }),
       new Field({
@@ -211,9 +207,16 @@ const viewForm = (req, tableOptions, roles, values) => {
         options: roles.map((r) => ({ value: r.id, label: r.role })),
       }),
       new Field({
-        label: req.__("On root page"),
-        name: "on_root_page",
-        type: "Bool",
+        name: "default_render_page",
+        label: req.__("Show on page"),
+        sublabel: req.__(
+          "Requests to render this view directly will instead show the chosen page, if any. The chosewn page should embed this view. Use this to decorate the view with additional elements."
+        ),
+        input_type: "select",
+        options: [
+          { value: "", label: "" },
+          ...pages.map((p) => ({ value: p.name, label: p.name })),
+        ],
       }),
       ...(isEdit
         ? [
@@ -239,13 +242,18 @@ router.get(
     const { viewname } = req.params;
 
     var viewrow = await View.findOne({ name: viewname });
-
+    if (!viewrow) {
+      req.flash("error", `View not found: ${text(viewname)}`);
+      res.redirect("/viewedit");
+      return;
+    }
     const tables = await Table.find();
     const currentTable = tables.find((t) => t.id === viewrow.table_id);
     viewrow.table_name = currentTable.name;
     const tableOptions = tables.map((t) => t.name);
     const roles = await User.get_roles();
-    const form = viewForm(req, tableOptions, roles, viewrow);
+    const pages = await Page.find();
+    const form = viewForm(req, tableOptions, roles, pages, viewrow);
     form.hidden("id");
     res.sendWrap(req.__(`Edit view`), {
       above: [
@@ -274,7 +282,8 @@ router.get(
     const tables = await Table.find();
     const tableOptions = tables.map((t) => t.name);
     const roles = await User.get_roles();
-    const form = viewForm(req, tableOptions, roles);
+    const pages = await Page.find();
+    const form = viewForm(req, tableOptions, roles, pages);
     if (req.query && req.query.table) {
       form.values.table_name = req.query.table;
     }
@@ -305,7 +314,8 @@ router.post(
     const tables = await Table.find();
     const tableOptions = tables.map((t) => t.name);
     const roles = await User.get_roles();
-    const form = viewForm(req, tableOptions, roles);
+    const pages = await Page.find();
+    const form = viewForm(req, tableOptions, roles, pages);
     const result = form.validate(req.body);
 
     const sendForm = (form) => {
@@ -380,7 +390,7 @@ const respondWorkflow = (view, wfres, req, res) => {
       },
       {
         type: noCard ? "container" : "card",
-        title: `${wfres.stepName} (step ${wfres.currentStep} / max ${wfres.maxSteps})`,
+        title: wfres.title,
         contents,
       },
     ],
@@ -391,12 +401,13 @@ const respondWorkflow = (view, wfres, req, res) => {
       req.__(`View configuration`),
       wrap(renderForm(wfres.renderForm, req.csrfToken()))
     );
-  else if (wfres.renderBuilder)
+  else if (wfres.renderBuilder) {
+    wfres.renderBuilder.options.view_id = view.id;
     res.sendWrap(
       req.__(`View configuration`),
       wrap(renderBuilder(wfres.renderBuilder, req.csrfToken()), true)
     );
-  else res.redirect(wfres.redirect);
+  } else res.redirect(wfres.redirect);
 };
 router.get(
   "/config/:name",
@@ -406,12 +417,15 @@ router.get(
     const { name } = req.params;
 
     const view = await View.findOne({ name });
-    const configFlow = await view.get_config_flow();
-    const wfres = await configFlow.run({
-      table_id: view.table_id,
-      viewname: name,
-      ...view.configuration,
-    });
+    const configFlow = await view.get_config_flow(req);
+    const wfres = await configFlow.run(
+      {
+        table_id: view.table_id,
+        viewname: name,
+        ...view.configuration,
+      },
+      req
+    );
     respondWorkflow(view, wfres, req, res);
   })
 );
@@ -424,8 +438,8 @@ router.post(
     const { name } = req.params;
 
     const view = await View.findOne({ name });
-    const configFlow = await view.get_config_flow();
-    const wfres = await configFlow.run(req.body);
+    const configFlow = await view.get_config_flow(req);
+    const wfres = await configFlow.run(req.body, req);
     respondWorkflow(view, wfres, req, res);
   })
 );
@@ -439,7 +453,7 @@ router.post(
     await add_to_menu({
       label: view.name,
       type: "View",
-      min_role: 10,
+      min_role: view.min_role,
       viewname: view.name,
     });
     req.flash(
@@ -478,5 +492,23 @@ router.post(
     await View.delete({ id });
     req.flash("success", req.__("View deleted"));
     res.redirect(`/viewedit`);
+  })
+);
+
+router.post(
+  "/savebuilder/:id",
+  setTenant,
+  isAdmin,
+  error_catcher(async (req, res) => {
+    const { id } = req.params;
+
+    if (id && req.body) {
+      const exview = await View.findOne({ id });
+      let newcfg = { ...exview.configuration, ...req.body };
+      await View.update({ configuration: newcfg }, +id);
+      res.json({ success: "ok" });
+    } else {
+      res.json({ error: "no view" });
+    }
   })
 );

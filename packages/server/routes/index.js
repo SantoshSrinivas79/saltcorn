@@ -8,6 +8,9 @@ const search = require("./search");
 const files = require("./files");
 const menu = require("./menu");
 const admin = require("./admin");
+const actions = require("./actions");
+const infoarch = require("./infoarch");
+const events = require("./events");
 const tenant = require("./tenant");
 const api = require("./api");
 const plugins = require("./plugins");
@@ -19,6 +22,7 @@ const crashlog = require("./crashlog");
 const del = require("./delete");
 const auth = require("../auth/routes");
 const useradmin = require("../auth/admin");
+const roleadmin = require("../auth/roleadmin");
 
 module.exports = (app) => {
   app.use("/table", table);
@@ -32,8 +36,11 @@ module.exports = (app) => {
   app.use("/menu", menu);
   app.use("/view", view);
   app.use("/crashlog", crashlog);
+  app.use("/events", events);
   app.use("/page", page);
   app.use("/pageedit", pageedit);
+  app.use("/actions", actions);
+  app.use("/site-structure", infoarch);
   app.use("/search", search);
   app.use("/admin", admin);
   app.use("/tenant", tenant);
@@ -42,4 +49,5 @@ module.exports = (app) => {
   app.use("/delete", del);
   app.use("/auth", auth);
   app.use("/useradmin", useradmin);
+  app.use("/roleadmin", roleadmin);
 };

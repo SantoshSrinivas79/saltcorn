@@ -2,22 +2,18 @@ const db = require("../db");
 const { getState } = require("../db/state");
 const Field = require("./field");
 const { contract, is } = require("contractis");
-
-const apply = (f, x) => (typeof f === "function" ? f(x) : f);
-
-const applyAsync = async (f, x) => {
-  if (typeof f === "function") return await f(x);
-  else return f;
-};
+const { applyAsync, apply } = require("../utils");
 
 class Workflow {
   constructor(o) {
     this.steps = o.steps || [];
     this.onDone = o.onDone || ((c) => c);
     this.action = o.action;
+    this.__ = (s) => s;
     contract.class(this);
   }
-  async run(body) {
+  async run(body, req) {
+    if (req) this.__ = (s) => req.__(s);
     if (!body || !body.stepName) {
       return this.runStep(body || {}, 0);
     }
@@ -41,7 +37,9 @@ class Workflow {
         if (this.action) form.action = this.action;
         if (!form.submitLabel)
           form.submitLabel =
-            stepIx === this.steps.length - 1 ? "Save" : "Next &raquo;";
+            stepIx === this.steps.length - 1
+              ? this.__("Save")
+              : this.__("Next") + " &raquo;";
 
         return {
           renderForm: form,
@@ -49,6 +47,7 @@ class Workflow {
           stepName: step.name,
           currentStep: stepIx + 1,
           maxSteps: this.steps.length,
+          title: this.title(step, stepIx),
         };
       }
       const toCtx = step.contextField
@@ -70,7 +69,7 @@ class Workflow {
   }
   async runStep(context, stepIx) {
     if (stepIx >= this.steps.length) {
-      return this.onDone(context);
+      return await this.onDone(context);
     }
     const step = this.steps[stepIx];
     if (step.onlyWhen) {
@@ -101,13 +100,16 @@ class Workflow {
       if (this.action) form.action = this.action;
       if (!form.submitLabel)
         form.submitLabel =
-          stepIx === this.steps.length - 1 ? "Save" : "Next &raquo;";
+          stepIx === this.steps.length - 1
+            ? this.__("Save")
+            : this.__("Next") + " &raquo;";
       return {
         renderForm: form,
         context,
         stepName: step.name,
         currentStep: stepIx + 1,
         maxSteps: this.steps.length,
+        title: this.title(step, stepIx),
       };
     } else if (step.builder) {
       const options = await applyAsync(step.builder, context);
@@ -124,8 +126,15 @@ class Workflow {
         stepName: step.name,
         currentStep: stepIx + 1,
         maxSteps: this.steps.length,
+        title: this.title(step, stepIx),
       };
     }
+  }
+
+  title(step, stepIx) {
+    return `${step.name} (${this.__("step")} ${stepIx + 1} / ${
+      this.steps.length > stepIx + 1 ? this.__("max") + " " : ""
+    }${this.steps.length})`;
   }
 }
 

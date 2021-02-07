@@ -2,6 +2,7 @@ const { contract, is, auto_test } = require("contractis");
 const { is_plugin_wrap, is_plugin } = require("./contracts");
 const { getState } = require("./db/state");
 const { renderForm } = require("@saltcorn/markup");
+const { mockReqRes } = require("./tests/mocks");
 
 const auto_test_wrap = (wrap) => {
   auto_test(contract(is_plugin_wrap, wrap, { n: 5 }));
@@ -27,8 +28,8 @@ const auto_test_type = (t) => {
   Object.values(fvs).forEach((fv) => {
     if (fv.isEdit) {
       const attr = generate_attributes(t.attributes, t.validate_attributes);
-      is.str(fv.run("foo", undefined, attr, "myclass", true));
-      is.str(fv.run("foo", undefined, attr, "myclass", false));
+      is.str(fv.run("foo", undefined, attr, "myclass", true, { name: "foo" }));
+      is.str(fv.run("foo", undefined, attr, "myclass", false, { name: "foo" }));
     }
   });
   //find examples, run all fieldview on each example
@@ -43,8 +44,10 @@ const auto_test_type = (t) => {
       if ((t.validate && t.validate(attribs)(x)) || !t.validate) {
         Object.values(fvs).forEach((fv) => {
           if (fv.isEdit) {
-            is.str(fv.run("foo", x, attribs, "myclass", true));
-            is.str(fv.run("foo", x, attribs, "myclass", false));
+            is.str(fv.run("foo", x, attribs, "myclass", true, { name: "foo" }));
+            is.str(
+              fv.run("foo", x, attribs, "myclass", false, { name: "foo" })
+            );
           } else {
             is.str(fv.run(x));
           }
@@ -72,25 +75,23 @@ const auto_test_workflow = async (wf, initialCtx) => {
   return await step(wf, initialCtx);
 };
 
-const mockReqRes = { req: { csrfToken: () => "" }, res: {} };
-
 const auto_test_viewtemplate = async (vt) => {
-  const wf = vt.configuration_workflow();
+  const wf = vt.configuration_workflow({ __: (s) => s });
   is.class("Workflow")(wf);
   for (let index = 0; index < 10; index++) {
     var cfg;
     if (vt.initial_config && Math.round() > 0.5)
-      cfg = await vt.initial_config({ table_id: 1 });
+      cfg = await vt.initial_config({ table_id: 2 });
     else
       cfg = await auto_test_workflow(wf, {
-        table_id: 1,
+        table_id: 2,
         viewname: "newview",
       });
     const sfs = await vt.get_state_fields(1, "newview", cfg);
-    const res = await vt.run(1, "newview", cfg, {}, mockReqRes);
+    const res = await vt.run(2, "newview", cfg, {}, mockReqRes);
     is.or(is.str, is.array(is.str))(res);
     if (sfs.some((sf) => (sf.name = "id"))) {
-      const resid = await vt.run(1, "newview", cfg, { id: 1 }, mockReqRes);
+      const resid = await vt.run(2, "newview", cfg, { id: 1 }, mockReqRes);
       is.or(is.str, is.array(is.str))(resid);
     }
   }

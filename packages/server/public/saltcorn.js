@@ -8,13 +8,11 @@ jQuery.fn.swapWith = function (to) {
   });
 };
 
-function sortby(k) {
-  $('input[name="_sortby"]').val(k);
-  $("form.stateForm").submit();
+function sortby(k, desc) {
+  set_state_fields({ _sortby: k, _sortdesc: desc ? "on" : { unset: true } });
 }
-function gopage(n) {
-  $('input[name="_page"]').val(n);
-  $("form.stateForm").submit();
+function gopage(n, pagesize, extra = {}) {
+  set_state_fields({ ...extra, _page: n, _pagesize: pagesize });
 }
 function add_repeater(nm) {
   var es = $("div.form-repeat.repeat-" + nm);
@@ -33,14 +31,19 @@ function apply_showif() {
   $("[data-show-if]").each(function (ix, element) {
     var e = $(element);
     var to_show = new Function("e", "return " + e.attr("data-show-if"));
-    if (to_show(e)) e.show();
-    else e.hide();
+    if (to_show(e))
+      e.show().find("input, textarea, button, select").prop("disabled", false);
+    else
+      e.hide().find("input, textarea, button, select").prop("disabled", true);
   });
   $("[data-calc-options]").each(function (ix, element) {
     var e = $(element);
     var data = JSON.parse(decodeURIComponent(e.attr("data-calc-options")));
 
-    var val = e.closest(".form-namespace").find(data[0]).val();
+    var val = e
+      .closest(".form-namespace")
+      .find(`[data-fieldname=${data[0]}]`)
+      .val();
 
     var options = data[1][val];
     var current = e.attr("data-selected");
@@ -54,6 +57,32 @@ function apply_showif() {
       e.attr("data-selected", ec.target.value);
     });
   });
+  $("[data-source-url]").each(function (ix, element) {
+    const e = $(element);
+    const rec = get_form_record(e);
+    ajax_post_json(e.attr("data-source-url"), rec, {
+      success: (data) => {
+        e.html(data);
+      },
+      error: (err) => {
+        console.error(err);
+        e.html("");
+      },
+    });
+  });
+}
+function get_form_record(e) {
+  const rec = {};
+  e.closest("form")
+    .find("input[name],select[name]")
+    .each(function () {
+      rec[$(this).attr("name")] = $(this).val();
+    });
+  return rec;
+}
+function showIfFormulaInputs(e, fml) {
+  const rec = get_form_record(e);
+  return new Function(`{${Object.keys(rec).join(",")}}`, "return " + fml)(rec);
 }
 
 function rep_del(e) {
@@ -105,6 +134,46 @@ function rep_down(e) {
 $(function () {
   $("form").change(apply_showif);
   apply_showif();
+  $("[data-inline-edit-dest-url]").each(function () {
+    if ($(this).find(".editicon").length === 0) {
+      var current = $(this).html();
+      $(this).html(
+        `<span class="current">${current}</span><i class="editicon fas fa-edit ml-1"></i>`
+      );
+    }
+  });
+  $("[data-inline-edit-dest-url]").click(function () {
+    var url = $(this).attr("data-inline-edit-dest-url");
+    var current = $(this).children("span.current").html();
+    $(this).replaceWith(
+      `<form method="post" action="${url}" >
+      <input type="hidden" name="_csrf" value="${_sc_globalCsrf}">
+      <input type="text" name="value" value="${current}">
+      <button type="submit" class="btn btn-sm btn-primary">OK</button>
+      </form>`
+    );
+  });
+  function setExplainer(that) {
+    var id = $(that).attr("id") + "_explainer";
+
+    var explainers = JSON.parse(
+      decodeURIComponent($(that).attr("data-explainers"))
+    );
+    var currentVal = explainers[$(that).val()];
+    $("#" + id).html(`<strong>${$(that).val()}</strong>: ${currentVal}`);
+    if (currentVal) $("#" + id).show();
+    else $("#" + id).hide();
+  }
+  $("[data-explainers]").each(function () {
+    var id = $(this).attr("id") + "_explainer";
+    if ($("#" + id).length === 0) {
+      $(this).after(`<div class="alert alert-info my-2" id="${id}"></div>`);
+      setExplainer(this);
+    }
+  });
+  $("[data-explainers]").change(function () {
+    setExplainer(this);
+  });
 });
 
 //https://stackoverflow.com/a/6021027
@@ -144,13 +213,24 @@ function set_state_field(key, value) {
     value
   );
 }
+function set_state_fields(kvs) {
+  var newhref = window.location.href;
+  Object.entries(kvs).forEach((kv) => {
+    if (kv[1].unset && kv[1].unset === true)
+      newhref = removeQueryStringParameter(newhref, kv[0]);
+    else newhref = updateQueryStringParameter(newhref, kv[0], kv[1]);
+  });
+  window.location.href = newhref;
+}
 function unset_state_field(key) {
   window.location.href = removeQueryStringParameter(window.location.href, key);
 }
 function href_to(href) {
   window.location.href = href;
 }
-
+function clear_state() {
+  window.location.href = window.location.href.split("?")[0];
+}
 function tristateClick(nm) {
   var current = $(`button#trib${nm}`).html();
   switch (current) {
@@ -169,6 +249,29 @@ function tristateClick(nm) {
   }
 }
 
+function notifyAlert(note) {
+  if (Array.isArray(note)) {
+    note.forEach(notifyAlert);
+    return;
+  }
+  var txt, type;
+  if (typeof note == "string") {
+    txt = note;
+    type = "info";
+  } else {
+    txt = note.text;
+    type = note.type;
+  }
+
+  $("#alerts-area")
+    .append(`<div class="alert alert-${type} alert-dismissible fade show" role="alert">
+  ${txt}
+  <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+    <span aria-hidden="true">&times;</span>
+  </button>
+</div>`);
+}
+
 function view_post(viewname, route, data, onDone) {
   $.ajax("/view/" + viewname + "/" + route, {
     dataType: "json",
@@ -178,7 +281,11 @@ function view_post(viewname, route, data, onDone) {
     },
     contentType: "application/json",
     data: JSON.stringify(data),
-  }).done(onDone);
+  }).done(function (res) {
+    if (onDone) onDone(res);
+    if (res.notify) notifyAlert(res.notify);
+    if (res.error) notifyAlert({ type: "danger", text: res.error });
+  });
 }
 var logged_errors = [];
 function globalErrorCatcher(message, source, lineno, colno, error) {
@@ -200,7 +307,7 @@ function press_store_button(clicked) {
   $(clicked).html('<i class="fas fa-spinner fa-spin"></i>');
 }
 
-function ajax_modal(url) {
+function ajax_modal(url, opts = {}) {
   if ($("#scmodal").length === 0) {
     $("body").append(`<div id="scmodal", class="modal" tabindex="-1">
     <div class="modal-dialog">
@@ -218,12 +325,18 @@ function ajax_modal(url) {
     </div>
   </div>`);
   }
+  if (opts.submitReload === false) $("#scmodal").addClass("no-submit-reload");
+  else $("#scmodal").removeClass("no-submit-reload");
   $.ajax(url, {
     success: function (res, textStatus, request) {
       var title = request.getResponseHeader("Page-Title");
       if (title) $("#scmodal .modal-title").html(title);
       $("#scmodal .modal-body").html(res);
       $("#scmodal").modal();
+      (opts.onOpen || function () {})(res);
+      $("#scmodal").on("hidden.bs.modal", function (e) {
+        (opts.onClose || function () {})(res);
+      });
     },
   });
 }
@@ -238,8 +351,9 @@ function ajaxSubmitForm(e) {
     },
     data: form_data,
     success: function () {
+      var no_reload = $("#scmodal").hasClass("no-submit-reload");
       $("#scmodal").modal("hide");
-      location.reload();
+      if (!no_reload) location.reload();
     },
     error: function (request) {
       var title = request.getResponseHeader("Page-Title");
@@ -250,6 +364,22 @@ function ajaxSubmitForm(e) {
   });
 
   return false;
+}
+function ajax_post_json(url, data, args = {}) {
+  ajax_post(url, {
+    data: JSON.stringify(data),
+    contentType: "application/json;charset=UTF-8",
+    ...args,
+  });
+}
+function ajax_post(url, args) {
+  $.ajax(url, {
+    type: "POST",
+    headers: {
+      "CSRF-Token": _sc_globalCsrf,
+    },
+    ...(args || {}),
+  });
 }
 function ajax_post_btn(e, reload_on_done, reload_delay) {
   var form = $(e).closest("form");
@@ -273,4 +403,27 @@ function ajax_post_btn(e, reload_on_done, reload_delay) {
   });
 
   return false;
+}
+
+function test_formula(tablename, stored) {
+  var formula = $("input[name=expression]").val();
+  ajax_post(`/field/test-formula`, {
+    data: { formula, tablename, stored },
+    success: (data) => {
+      $("#test_formula_output").html(data);
+    },
+  });
+}
+function align_dropdown(id) {
+  setTimeout(() => {
+    if ($("#dm" + id).hasClass("show")) {
+      var inputWidth = $(".input-group.search-bar").outerWidth();
+      $(".dropdown-menu.search-bar").css("width", inputWidth);
+      var d0pos = $(".input-group.search-bar").offset();
+      $("#dm" + id).offset({ left: d0pos.left });
+      $(document).on("click", ".dropdown-menu.search-bar", function (e) {
+        e.stopPropagation();
+      });
+    }
+  }, 0);
 }

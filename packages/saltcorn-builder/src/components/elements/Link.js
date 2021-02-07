@@ -1,6 +1,6 @@
 import React, { Fragment, useContext } from "react";
 import { useNode } from "@craftjs/core";
-import { blockProps, BlockSetting, TextStyleSetting } from "./utils";
+import { blockProps, BlockSetting, TextStyleSetting, OrFormula } from "./utils";
 import optionsCtx from "../context";
 
 export const Link = ({ text, block, isFormula, textStyle }) => {
@@ -21,50 +21,6 @@ export const Link = ({ text, block, isFormula, textStyle }) => {
   );
 };
 
-const OrFormula = ({ setProp, isFormula, node, nodekey, children }) => {
-  const { mode } = useContext(optionsCtx);
-
-  return mode !== "show" ? (
-    children
-  ) : (
-    <Fragment>
-      <div className="input-group  input-group-sm w-100">
-        {isFormula[nodekey] ? (
-          <input
-            type="text"
-            className="form-control text-to-display"
-            value={node[nodekey]}
-            onChange={(e) =>
-              setProp((prop) => (prop[nodekey] = e.target.value))
-            }
-          />
-        ) : (
-          children
-        )}
-        <div className="input-group-append">
-          <button
-            className={`btn activate-formula ${
-              isFormula[nodekey] ? "btn-secondary" : "btn-outline-secondary"
-            }`}
-            title="Calculated formula"
-            type="button"
-            onClick={(e) =>
-              setProp((prop) => (prop.isFormula[nodekey] = !isFormula[nodekey]))
-            }
-          >
-            <i className="fas fa-calculator"></i>
-          </button>
-        </div>
-      </div>
-      {isFormula[nodekey] && (
-        <div style={{ marginTop: "-5px" }}>
-          <small className="text-muted text-monospace">FORMULA</small>
-        </div>
-      )}
-    </Fragment>
-  );
-};
-
 export const LinkSettings = () => {
   const node = useNode((node) => ({
     text: node.data.props.text,
@@ -72,6 +28,9 @@ export const LinkSettings = () => {
     block: node.data.props.block,
     isFormula: node.data.props.isFormula,
     textStyle: node.data.props.textStyle,
+    nofollow: node.data.props.nofollow,
+    link_src: node.data.props.link_src,
+    target_blank: node.data.props.target_blank,
   }));
   const {
     actions: { setProp },
@@ -80,8 +39,11 @@ export const LinkSettings = () => {
     block,
     isFormula,
     textStyle,
+    nofollow,
+    target_blank,
+    link_src,
   } = node;
-
+  const options = useContext(optionsCtx);
   return (
     <div>
       <label>Text to display</label>
@@ -93,15 +55,101 @@ export const LinkSettings = () => {
           onChange={(e) => setProp((prop) => (prop.text = e.target.value))}
         />
       </OrFormula>
-      <label>URL</label>
-      <OrFormula nodekey="url" {...{ setProp, isFormula, node }}>
+      <label>Link source</label>
+      <select
+        value={link_src}
+        className="form-control"
+        onChange={(e) =>
+          setProp((prop) => {
+            prop.link_src = e.target.value;
+            if (e.target.value !== "URL") {
+              prop.isFormula.url = false;
+            }
+          })
+        }
+      >
+        <option>URL</option>
+        {(options.pages || []).length > 0 && <option>Page</option>}
+        {(options.views || []).length > 0 && <option>View</option>}
+      </select>
+      {link_src === "URL" && (
+        <Fragment>
+          {" "}
+          <label>URL</label>
+          <OrFormula nodekey="url" {...{ setProp, isFormula, node }}>
+            <input
+              type="text"
+              className="form-control "
+              value={url}
+              onChange={(e) => setProp((prop) => (prop.url = e.target.value))}
+            />
+          </OrFormula>
+        </Fragment>
+      )}
+      {link_src === "Page" && (
+        <Fragment>
+          {" "}
+          <label>Page</label>
+          <select
+            value={url}
+            className="form-control"
+            onChange={(e) =>
+              setProp((prop) => {
+                prop.url = e.target.value;
+              })
+            }
+          >
+            <option></option>
+            {(options.pages || []).map((p) => (
+              <option value={`/page/${p.name}`}>{p.name}</option>
+            ))}
+          </select>
+        </Fragment>
+      )}
+      {link_src === "View" && (
+        <Fragment>
+          {" "}
+          <label>View</label>
+          <select
+            value={url}
+            className="form-control"
+            onChange={(e) =>
+              setProp((prop) => {
+                prop.url = e.target.value;
+              })
+            }
+          >
+            <option></option>
+            {(options.views || []).map((p) => (
+              <option value={`/view/${p.name}`}>{p.name}</option>
+            ))}
+          </select>
+        </Fragment>
+      )}
+      <div className="form-check">
         <input
-          type="text"
-          className="form-control "
-          value={url}
-          onChange={(e) => setProp((prop) => (prop.url = e.target.value))}
+          className="form-check-input"
+          name="block"
+          type="checkbox"
+          checked={nofollow}
+          onChange={(e) =>
+            setProp((prop) => (prop.nofollow = e.target.checked))
+          }
         />
-      </OrFormula>
+        <label className="form-check-label">Nofollow</label>
+      </div>
+      <div className="form-check">
+        <input
+          className="form-check-input"
+          name="block"
+          type="checkbox"
+          checked={target_blank}
+          onChange={(e) =>
+            setProp((prop) => (prop.target_blank = e.target.checked))
+          }
+        />
+        <label className="form-check-label">Open in new tab</label>
+      </div>
       <BlockSetting block={block} setProp={setProp} />
       <TextStyleSetting textStyle={textStyle} setProp={setProp} />
     </div>
@@ -113,8 +161,11 @@ Link.craft = {
     text: "Click here",
     url: "https://saltcorn.com/",
     block: false,
+    nofollow: false,
+    target_blank: false,
     isFormula: {},
     textStyle: "",
+    link_src: "URL",
   },
   displayName: "Link",
   related: {

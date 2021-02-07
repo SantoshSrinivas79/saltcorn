@@ -10,6 +10,7 @@ const Workflow = require("@saltcorn/data/models/workflow");
 const Form = require("@saltcorn/data/models/form");
 const File = require("@saltcorn/data/models/file");
 const { getViews } = require("@saltcorn/data/models/layout");
+const { add_to_menu } = require("@saltcorn/data/models/pack");
 
 const { setTenant, isAdmin, error_catcher } = require("./utils.js");
 const {
@@ -18,11 +19,49 @@ const {
   link,
   post_btn,
   post_delete_btn,
+  post_dropdown_item,
   renderBuilder,
+  settingsDropdown,
 } = require("@saltcorn/markup");
+const { getActionConfigFields } = require("@saltcorn/data/plugin-helper");
+
 const router = new Router();
 module.exports = router;
-
+const page_dropdown = (page, req) =>
+  settingsDropdown(`dropdownMenuButton${page.id}`, [
+    a(
+      {
+        class: "dropdown-item",
+        href: `/page/${encodeURIComponent(page.name)}`,
+      },
+      '<i class="fas fa-running"></i>&nbsp;' + req.__("Run")
+    ),
+    a(
+      {
+        class: "dropdown-item",
+        href: `/pageedit/edit/${encodeURIComponent(page.name)}`,
+      },
+      '<i class="fas fa-edit"></i>&nbsp;' + req.__("Edit")
+    ),
+    post_dropdown_item(
+      `/pageedit/add-to-menu/${page.id}`,
+      '<i class="fas fa-bars"></i>&nbsp;' + req.__("Add to menu"),
+      req
+    ),
+    post_dropdown_item(
+      `/pageedit/clone/${page.id}`,
+      '<i class="far fa-copy"></i>&nbsp;' + req.__("Duplicate"),
+      req
+    ),
+    div({ class: "dropdown-divider" }),
+    post_dropdown_item(
+      `/pageedit/delete/${page.id}`,
+      '<i class="far fa-trash-alt"></i>&nbsp;' + req.__("Delete"),
+      req,
+      true,
+      page.name
+    ),
+  ]);
 const pageFlow = (req) =>
   new Workflow({
     action: "/pageedit/edit/",
@@ -83,14 +122,31 @@ const pageFlow = (req) =>
         name: req.__("Layout"),
         builder: async (context) => {
           const views = await View.find();
+          const pages = await Page.find();
           const images = await File.find({ mime_super: "image" });
+          const roles = await User.get_roles();
+          const stateActions = getState().actions;
+          const actions = Object.entries(stateActions)
+            .filter(([k, v]) => !v.requireRow)
+            .map(([k, v]) => k);
 
+          const actionConfigForms = {};
+          for (const name of actions) {
+            const action = stateActions[name];
+            if (action.configFields) {
+              actionConfigForms[name] = await getActionConfigFields(action);
+            }
+          }
           return {
             views,
             images,
+            pages,
+            actions,
+            actionConfigForms,
             page_name: context.name,
             page_id: context.id,
             mode: "page",
+            roles,
           };
         },
       },
@@ -140,7 +196,10 @@ const getPageList = (rows, roles, req) => {
   return div(
     mkTable(
       [
-        { label: req.__("Name"), key: "name" },
+        {
+          label: req.__("Name"),
+          key: (r) => link(`/page/${r.name}`, r.name),
+        },
         {
           label: req.__("Role to access"),
           key: (row) => {
@@ -148,19 +207,13 @@ const getPageList = (rows, roles, req) => {
             return role ? role.role : "?";
           },
         },
-
-        {
-          label: req.__("Run"),
-          key: (r) => link(`/page/${r.name}`, req.__("Run")),
-        },
         {
           label: req.__("Edit"),
           key: (r) => link(`/pageedit/edit/${r.name}`, req.__("Edit")),
         },
         {
-          label: req.__("Delete"),
-          key: (r) =>
-            post_delete_btn(`/pageedit/delete/${r.id}`, req.csrfToken()),
+          label: "",
+          key: (r) => page_dropdown(r, req),
         },
       ],
       rows
@@ -191,8 +244,11 @@ const getRootPageForm = (pages, roles, req) => {
         })
     ),
   });
+  const modernCfg = getState().getConfig("home_page_by_role", false);
   for (const role of roles) {
-    form.values[role.role] = getState().getConfig(role.role + "_home", "");
+    form.values[role.role] = modernCfg && modernCfg[role.id];
+    if (typeof form.values[role.role] !== "string")
+      form.values[role.role] = getState().getConfig(role.role + "_home", "");
   }
   return form;
 };
@@ -238,7 +294,7 @@ const respondWorkflow = (page, wfres, req, res) => {
       },
       {
         type: noCard ? "container" : "card",
-        title: `${wfres.stepName} (step ${wfres.currentStep} / max ${wfres.maxSteps})`,
+        title: wfres.title,
         contents,
       },
     ],
@@ -268,7 +324,7 @@ router.get(
       req.flash("error", req.__(`Page %s not found`, pagename));
       res.redirect(`/pageedit`);
     } else {
-      const wfres = await pageFlow(req).run(page);
+      const wfres = await pageFlow(req).run(page, req);
       respondWorkflow(page, wfres, req, res);
     }
   })
@@ -279,7 +335,7 @@ router.get(
   setTenant,
   isAdmin,
   error_catcher(async (req, res) => {
-    const wfres = await pageFlow(req).run({});
+    const wfres = await pageFlow(req).run({}, req);
     respondWorkflow(null, wfres, req, res);
   })
 );
@@ -289,7 +345,7 @@ router.post(
   setTenant,
   isAdmin,
   error_catcher(async (req, res) => {
-    const wfres = await pageFlow(req).run(req.body);
+    const wfres = await pageFlow(req).run(req.body, req);
     const page =
       wfres.context && (await Page.findOne({ name: wfres.context.name }));
 
@@ -336,14 +392,53 @@ router.post(
     const form = await getRootPageForm(pages, roles, req);
     const valres = form.validate(req.body);
     if (valres.success) {
+      const home_page_by_role =
+        getState().getConfig("home_page_by_role", []) || [];
       for (const role of roles) {
-        await getState().setConfig(
-          role.role + "_home",
-          valres.success[role.role]
-        );
+        home_page_by_role[role.id] = valres.success[role.role];
       }
+      await getState().setConfig("home_page_by_role", home_page_by_role);
       req.flash("success", req.__(`Root pages updated`));
     } else req.flash("danger", req.__(`Error reading pages`));
+    res.redirect(`/pageedit`);
+  })
+);
+
+router.post(
+  "/add-to-menu/:id",
+  setTenant,
+  isAdmin,
+  error_catcher(async (req, res) => {
+    const { id } = req.params;
+    const page = await Page.findOne({ id });
+    await add_to_menu({
+      label: page.name,
+      type: "Page",
+      min_role: page.min_role,
+      pagename: page.name,
+    });
+    req.flash(
+      "success",
+      req.__(
+        "Page %s added to menu. Adjust access permissions in Settings &raquo; Menu",
+        page.name
+      )
+    );
+    res.redirect(`/pageedit`);
+  })
+);
+router.post(
+  "/clone/:id",
+  setTenant,
+  isAdmin,
+  error_catcher(async (req, res) => {
+    const { id } = req.params;
+    const page = await Page.findOne({ id });
+    const newpage = await page.clone();
+    req.flash(
+      "success",
+      req.__("Page %s duplicated as %s", page.name, newpage.name)
+    );
     res.redirect(`/pageedit`);
   })
 );

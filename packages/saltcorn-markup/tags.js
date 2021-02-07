@@ -42,8 +42,9 @@ const input = (kvs) => {
   return `<input ${attribs}>`;
 };
 
+//https://stackoverflow.com/a/59220393
 const domReady = (js) =>
-  `document.addEventListener('DOMContentLoaded',function(){${js}},false);`;
+  `(function(f){if (document.readyState === "complete") f(); else document.addEventListener('DOMContentLoaded',f,false)})(function(){${js}});`;
 
 const text = (t) => (t === 0 ? "0" : xss(t));
 const text_attr = (t) => (t === 0 ? "0" : escape(t));
@@ -66,12 +67,13 @@ module.exports = {
   img: mkTag("img"),
   thead: mkTag("thead"),
   tbody: mkTag("tbody"),
-  small: mkTag("small"),
+  small: mkTag("small", true),
   pre: mkTag("pre"),
   code: mkTag("code"),
   header: mkTag("header"),
   footer: mkTag("footer"),
   section: mkTag("section"),
+  strong: mkTag("strong"),
   tr: mkTag("tr"),
   th: mkTag("th"),
   td: mkTag("td"),
@@ -87,6 +89,7 @@ module.exports = {
   nav: mkTag("nav"),
   i: mkTag("i", true),
   hr: mkTag("hr"),
+  link: mkTag("link"),
   domReady,
   input,
   text,

@@ -44,7 +44,7 @@ describe("Table create", () => {
     expect(await browser.content()).toContain("Persons table");
   });
   it("edits int field", async () => {
-    await browser.goto("/field/2");
+    await browser.goto("/field/3");
     expect(await browser.content()).toContain("Edit field");
     await browser.clickNav("button[type=submit]");
     await browser.erase_input("#inputmin");
@@ -63,6 +63,7 @@ describe("Table create", () => {
     expect(await browser.content()).toContain("Persons table");
     expect(await browser.content()).toContain(">Useless<");
     await browser.clickNav("tr:nth-child(3) button");
+    await browser.page.waitFor(1000);
     expect(await browser.content()).toContain("Persons table");
     expect(await browser.content()).not.toContain(">Useless<");
     expect(await browser.content()).toContain("Field Useless deleted");
@@ -98,21 +99,24 @@ describe("Table create", () => {
     await browser.page.select("#inputtable_name", "Persons");
     await browser.clickNav("button[type=submit]");
     expect(await browser.content()).toContain("Action button");
-    await browser.page.click("span.is-text");
-    await browser.page.waitForSelector("input.text-to-display");
-    await browser.erase_input("input.text-to-display");
-    await browser.slowly_type("input.text-to-display", "MyOwnInput");
+    await browser.page.click("div.is-text");
+    await browser.page.waitForSelector("div.cke_editable");
+    await browser.erase_input("div.cke_editable", 15);
+    await browser.page.waitForSelector("div.cke_editable");
+    await browser.page.waitFor(100);
+
+    await browser.slowly_type("div.cke_editable", "MyOwnInput", true);
     await browser.clickNav("button.btn-primary.builder-save");
     await browser.clickNav("button[type=submit]");
 
     expect(await browser.content()).toContain("Add view");
     expect(await browser.content()).toContain("PersonEdit");
   });
+
   it("edits list view", async () => {
     await browser.goto("/viewedit/edit/PersonList");
     expect(await browser.content()).toContain("PersonList");
     await browser.page.select("#inputmin_role", "10");
-    await browser.page.click("#inputon_root_page");
     await browser.clickNav("button[type=submit]");
     expect(await browser.content()).toContain("Use view to create");
     await browser.page.select("#inputview_to_create", "PersonEdit");
@@ -150,13 +154,14 @@ describe("Table create", () => {
     await browser.page.select("#inputtable_name", "Persons");
     await browser.clickNav("button[type=submit]");
     expect(await browser.content()).toContain("Join field");
-    await browser.page.click("span.is-text");
-    await browser.page.waitForSelector("input.text-to-display");
+    await browser.page.click("div.is-text");
+    await browser.page.waitForSelector("div.cke_editable");
     await browser.page.waitFor(100);
-    await browser.erase_input("input.text-to-display");
-    await browser.slowly_type("input.text-to-display", "MyOtherInput");
+    await browser.erase_input("div.cke_editable", 15);
+    await browser.slowly_type("div.cke_editable", "MyOtherInput", true);
     await browser.page.waitFor(100);
     await browser.clickNav("button.btn-primary.builder-save");
+    await browser.clickNav("button[type=submit]");
 
     expect(await browser.content()).toContain("Add view");
     expect(await browser.content()).toContain("PersonShow");
@@ -188,10 +193,9 @@ describe("Table create", () => {
     expect(await browser.content()).not.toContain("startbootstrap-sb-admin-2");
   });
   it("Changes site name", async () => {
-    await browser.goto("/config");
+    await browser.goto("/admin");
     expect(await browser.content()).toContain("Site name");
     expect(await browser.content()).toContain('"Saltcorn"');
-    await browser.goto("/config/edit/site_name");
     await browser.page.type("#inputsite_name", "MyFabSite");
     await browser.clickNav("button[type=submit]");
     await browser.goto("/");
@@ -201,7 +205,7 @@ describe("Table create", () => {
     const page = await browser.content();
     expect(page).toContain('href="/table"');
     expect(page).toContain('href="/viewedit"');
-    expect(page).toContain('href="/config"');
+    expect(page).toContain('href="/admin"');
     expect(page).toContain('href="/plugins"');
   });
   it("Logs out", async () => {
@@ -213,9 +217,9 @@ describe("Table create", () => {
     const page = await browser.content();
     expect(page).toContain("Login");
     expect(page).not.toContain("Logout");
-    expect(page).toContain("Sign up");
-    expect(page).toContain("<title>PersonList</title>");
-    expect(page).toContain("TerryTheBeaver");
+    expect(page).toContain("Create an account");
+    //expect(page).toContain("<title>PersonList</title>");
+    //expect(page).toContain("TerryTheBeaver");
     expect(page).not.toContain('href="/table"');
   });
   it("Signs up", async () => {

@@ -7,11 +7,16 @@ const Table = require("@saltcorn/data/models/table");
 const Form = require("@saltcorn/data/models/form");
 const Workflow = require("@saltcorn/data/models/workflow");
 const User = require("@saltcorn/data/models/user");
-const { expressionValidator } = require("@saltcorn/data/models/expression");
+const {
+  expressionValidator,
+  get_async_expression_function,
+  get_expression_function,
+} = require("@saltcorn/data/models/expression");
 const db = require("@saltcorn/data/db");
 
 const { setTenant, isAdmin, error_catcher } = require("./utils.js");
 const expressionBlurb = require("../markup/expression_blurb");
+const { readState } = require("@saltcorn/data/plugin-helper");
 const router = new Router();
 module.exports = router;
 
@@ -20,57 +25,56 @@ const fieldForm = (req, fkey_opts, existing_names, id) =>
     action: "/field",
     validator: (vs) => {
       if (vs.calculated && vs.type == "File")
-        return "Calculated fields cannot have File type";
+        return req.__("Calculated fields cannot have File type");
       if (vs.calculated && vs.type.startsWith("Key to"))
-        return "Calculated fields cannot have Key type";
+        return req.__("Calculated fields cannot have Key type");
     },
     fields: [
       new Field({
-        label: "Label",
+        label: req.__("Label"),
         name: "label",
         input_type: "text",
         validator(s) {
-          if (!s || s === "") return "Missing label";
+          if (!s || s === "") return req.__("Missing label");
           if (s.toLowerCase() === "id")
-            return `Column '${s}' already exists (but is hidden)`;
+            return req.__("Column %s already exists (but is hidden)", s);
           if (!id && existing_names.includes(Field.labelToName(s)))
-            return `Column '${s}' already exists`;
+            return req.__("Column %s already exists", s);
         },
       }),
       new Field({
-        label: "Type",
+        label: req.__("Type"),
         name: "type",
         input_type: "select",
         options: getState().type_names.concat(fkey_opts || []),
         disabled: !!id && !getState().getConfig("development_mode", false),
       }),
       new Field({
-        label: "Calculated (Experimental)",
+        label: req.__("Calculated"),
         name: "calculated",
         type: "Bool",
-        class: "iscalc",
         disabled: !!id,
       }),
       new Field({
-        label: "Required",
+        label: req.__("Required"),
         name: "required",
         type: "Bool",
         disabled: !!id && db.isSQLite,
-        showIf: { ".iscalc": false },
+        showIf: { calculated: false },
       }),
       new Field({
-        label: "Unique",
+        label: req.__("Unique"),
         name: "is_unique",
-        showIf: { ".iscalc": false },
+        showIf: { calculated: false },
         type: "Bool",
       }),
 
       new Field({
-        label: "Stored",
+        label: req.__("Stored"),
         name: "stored",
         type: "Bool",
         disabled: !!id,
-        showIf: { ".iscalc": true },
+        showIf: { calculated: true },
       }),
     ],
   });
@@ -80,6 +84,16 @@ const calcFieldType = (ctxType) =>
     ? { type: "Key", reftable_name: ctxType.replace("Key to ", "") }
     : { type: ctxType };
 
+const translateAttributes = (attrs, req) =>
+  Array.isArray(attrs)
+    ? attrs.map((attr) => translateAttribute(attr, req))
+    : attrs;
+
+const translateAttribute = (attr, req) => {
+  const res = { ...attr };
+  if (res.sublabel) res.sublabel = req.__(res.sublabel);
+  return res;
+};
 const fieldFlow = (req) =>
   new Workflow({
     action: "/field",
@@ -155,11 +169,7 @@ const fieldFlow = (req) =>
           const table = tables.find((t) => t.id === context.table_id);
           const existing_fields = await table.getFields();
           const existingNames = existing_fields.map((f) => f.name);
-          const fkey_opts = [
-            ...tables.map((t) => `Key to ${t.name}`),
-            "Key to users",
-            "File",
-          ];
+          const fkey_opts = [...tables.map((t) => `Key to ${t.name}`), "File"];
           const form = fieldForm(req, fkey_opts, existingNames, context.id);
           if (context.type === "Key" && context.reftable_name) {
             form.values.type = `Key to ${context.reftable_name}`;
@@ -194,8 +204,15 @@ const fieldFlow = (req) =>
               ],
             });
           } else {
+            const type = getState().types[context.type];
             return new Form({
-              fields: getState().types[context.type].attributes,
+              validator(vs) {
+                if (type.validate_attributes) {
+                  const res = type.validate_attributes(vs);
+                  if (!res) return req.__("Invalid attributes");
+                }
+              },
+              fields: translateAttributes(type.attributes, req),
             });
           }
         },
@@ -207,13 +224,28 @@ const fieldFlow = (req) =>
           const table = await Table.findOne({ id: context.table_id });
           const fields = await table.getFields();
           return new Form({
-            blurb: expressionBlurb(context.type, context.stored, fields),
+            blurb: expressionBlurb(context.type, context.stored, fields, req),
             fields: [
               new Field({
                 name: "expression",
                 label: req.__("Formula"),
                 type: "String",
                 validator: expressionValidator,
+              }),
+              new Field({
+                name: "test_btn",
+                label: req.__("Test"),
+                input_type: "custom_html",
+                attributes: {
+                  html: `<button type="button" id="test_formula_btn" onclick="test_formula('${
+                    table.name
+                  }', ${JSON.stringify(
+                    context.stored
+                  )})" class="btn btn-outline-secondary">${req.__(
+                    "Test"
+                  )}</button>
+                  <div id="test_formula_output"></div>`,
+                },
               }),
             ],
           });
@@ -222,10 +254,7 @@ const fieldFlow = (req) =>
       {
         name: req.__("Summary"),
         onlyWhen: (context) =>
-          context.type !== "Key to users" &&
-          context.reftable_name !== "users" &&
-          context.type !== "File" &&
-          new Field(context).is_fkey,
+          context.type !== "File" && new Field(context).is_fkey,
         form: async (context) => {
           const fld = new Field(context);
           const table = await Table.findOne({ name: fld.reftable_name });
@@ -251,7 +280,6 @@ const fieldFlow = (req) =>
       {
         name: req.__("Default"),
         onlyWhen: async (context) => {
-          if (context.type === "Key to users") context.summary_field = "email";
           if (!context.required || context.id || context.calculated)
             return false;
           const table = await Table.findOne({ id: context.table_id });
@@ -288,10 +316,13 @@ router.get(
     const { id } = req.params;
     const field = await Field.findOne({ id });
     const table = await Table.findOne({ id: field.table_id });
-    const wfres = await fieldFlow(req).run({
-      ...field.toJson,
-      ...field.attributes,
-    });
+    const wfres = await fieldFlow(req).run(
+      {
+        ...field.toJson,
+        ...field.attributes,
+      },
+      req
+    );
     res.sendWrap(req.__(`Edit field`), {
       above: [
         {
@@ -305,7 +336,7 @@ router.get(
         },
         {
           type: "card",
-          title: `${field.label}: ${wfres.stepName} (step ${wfres.currentStep} / max ${wfres.maxSteps})`,
+          title: `${field.label}: ${wfres.title}`,
           contents: renderForm(wfres.renderForm, req.csrfToken()),
         },
       ],
@@ -321,7 +352,7 @@ router.get(
     const { table_id } = req.params;
     const table = await Table.findOne({ id: table_id });
 
-    const wfres = await fieldFlow(req).run({ table_id: +table_id });
+    const wfres = await fieldFlow(req).run({ table_id: +table_id }, req);
     res.sendWrap(req.__(`New field`), {
       above: [
         {
@@ -335,9 +366,7 @@ router.get(
         },
         {
           type: "card",
-          title:
-            req.__(`New field:`) +
-            ` ${wfres.stepName} (step ${wfres.currentStep} / max ${wfres.maxSteps})`,
+          title: req.__(`New field:`) + ` ${wfres.title}`,
           contents: renderForm(wfres.renderForm, req.csrfToken()),
         },
       ],
@@ -365,7 +394,7 @@ router.post(
   setTenant,
   isAdmin,
   error_catcher(async (req, res) => {
-    const wfres = await fieldFlow(req).run(req.body);
+    const wfres = await fieldFlow(req).run(req.body, req);
     if (wfres.renderForm) {
       const table = await Table.findOne({ id: wfres.context.table_id });
       res.sendWrap(req.__(`Field attributes`), {
@@ -387,8 +416,8 @@ router.post(
           {
             type: "card",
             title: `${wfres.context.label || req.__("New field")}: ${
-              wfres.stepName
-            } (step ${wfres.currentStep} / max ${wfres.maxSteps})`,
+              wfres.title
+            }`,
             contents: renderForm(wfres.renderForm, req.csrfToken()),
           },
         ],
@@ -396,6 +425,66 @@ router.post(
     } else {
       if (wfres.flash) req.flash(...wfres.flash);
       res.redirect(wfres.redirect);
+    }
+  })
+);
+
+router.post(
+  "/test-formula",
+  setTenant,
+  isAdmin,
+  error_catcher(async (req, res) => {
+    const { formula, tablename, stored } = req.body;
+    const table = await Table.findOne({ name: tablename });
+    const fields = await table.getFields();
+    const rows = await table.getRows({}, { orderBy: "RANDOM()", limit: 1 });
+    if (rows.length < 1) return "No rows in table";
+    let result;
+    try {
+      if (stored) {
+        const f = get_async_expression_function(formula, fields);
+        result = await f(rows[0]);
+      } else {
+        const f = get_expression_function(formula, fields);
+        result = f(rows[0]);
+      }
+      res.send(
+        `Result of running on row with id=${
+          rows[0].id
+        } is: <pre>${JSON.stringify(result)}</pre>`
+      );
+    } catch (e) {
+      return res.send(
+        `Error on running on row with id=${rows[0].id}: ${e.message}`
+      );
+    }
+  })
+);
+router.post(
+  "/show-calculated/:tableName/:fieldName/:fieldview",
+  setTenant,
+  isAdmin,
+  error_catcher(async (req, res) => {
+    const { tableName, fieldName, fieldview } = req.params;
+    const table = await Table.findOne({ name: tableName });
+    const fields = await table.getFields();
+    const field = fields.find((f) => f.name === fieldName);
+    const formula = field.expression;
+    const row = { ...req.body };
+    readState(row, fields);
+    let result;
+    try {
+      if (field.stored) {
+        const f = get_async_expression_function(formula, fields);
+        result = await f(row);
+      } else {
+        const f = get_expression_function(formula, fields);
+        result = f(row);
+      }
+      const fv = field.type.fieldviews[fieldview];
+      res.send(fv.run(result));
+    } catch (e) {
+      return res.status(400).send(`Error: ${e.message}`);
     }
   })
 );

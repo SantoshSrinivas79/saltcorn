@@ -8,6 +8,8 @@ const { ul, li, div, small, a, h5, p, i } = require("@saltcorn/markup/tags");
 const Table = require("@saltcorn/data/models/table");
 const { fetch_available_packs } = require("@saltcorn/data/models/pack");
 const { restore_backup } = require("../markup/admin");
+const { get_latest_npm_version } = require("@saltcorn/data/models/config");
+const packagejson = require("../package.json");
 
 const tableTable = (tables) =>
   mkTable(
@@ -33,6 +35,23 @@ const viewTable = (views) =>
       },
     ],
     views
+  );
+
+const pageTable = (pages) =>
+  mkTable(
+    [
+      { label: "Name", key: "name" },
+      {
+        label: "Run",
+        key: (r) => link(`/page/${encodeURIComponent(r.name)}`, "Run"),
+      },
+      {
+        label: "Edit",
+        key: (r) =>
+          link(`/pageedit/edit/${encodeURIComponent(r.name)}`, "Edit"),
+      },
+    ],
+    pages
   );
 
 const welcome_page = async (req) => {
@@ -180,9 +199,25 @@ const no_views_logged_in = async (req, res) => {
   if (role > 1 || req.user.tenant !== db.getTenantSchema())
     res.sendWrap(req.__("Hello"), req.__("Welcome to Saltcorn!"));
   else {
+    const isRoot = db.getTenantSchema() === db.connectObj.default_schema;
+    const latest = isRoot && (await get_latest_npm_version("@saltcorn/cli"));
+    const can_update = packagejson.version !== latest;
+    if (latest && can_update)
+      req.flash(
+        "warning",
+        req.__(
+          "An upgrade to Saltcorn is available! Current version: %s; latest version: %s.",
+          packagejson.version,
+          latest
+        ) +
+          " " +
+          a({ href: "/admin/system" }, req.__("Upgrade here"))
+      );
     const tables = await Table.find({}, { orderBy: "name" });
     const views = await View.find({});
-    if (tables.length === 0) {
+    const pages = await Page.find({});
+    if (tables.length <= 1) {
+      //users
       res.sendWrap(req.__("Hello"), await welcome_page(req));
     } else if (views.length === 0) {
       res.sendWrap("Hello", {
@@ -259,14 +294,33 @@ const no_views_logged_in = async (req, res) => {
               ),
             ],
           },
+          {
+            type: "card",
+            title: link("/pageedit", req.__("Pages")),
+            contents: [
+              pageTable(pages),
+              div(
+                a(
+                  { href: `/pageedit/new`, class: "btn btn-primary" },
+                  req.__("Create a page")
+                )
+              ),
+            ],
+          },
         ],
       });
     }
   }
 };
 
-const get_config_response = async (cfgKey, res, req) => {
-  const homeCfg = getState().getConfig(cfgKey);
+const get_config_response = async (role_id, res, req) => {
+  const modernCfg = getState().getConfig("home_page_by_role", false);
+  const legacy_role = { 10: "public", 8: "user", 4: "staff", 1: "admin" }[
+    role_id
+  ];
+  let homeCfg = modernCfg && modernCfg[role_id];
+  if (typeof homeCfg !== "string")
+    homeCfg = getState().getConfig(legacy_role + "_home");
   if (homeCfg) {
     if (getState().pages[homeCfg]) {
       const page = getState().pages[homeCfg];
@@ -297,36 +351,16 @@ const get_config_response = async (cfgKey, res, req) => {
 module.exports = async (req, res) => {
   const isAuth = req.isAuthenticated();
   const role_id = req.user ? req.user.role_id : 10;
-  const role = { 10: "public", 8: "user", 4: "staff", 1: "admin" }[role_id];
-  const cfgResp = await get_config_response(role + "_home", res, req);
+  const cfgResp = await get_config_response(role_id, res, req);
   if (cfgResp) return;
 
-  const views = getState().views.filter(
-    (v) => v.on_root_page && (isAuth || v.min_role === 10)
-  );
-
-  if (views.length === 0) {
-    if (!isAuth) {
-      const hasUsers = await User.nonEmpty();
-      if (!hasUsers) {
-        res.redirect("/auth/create_first_user");
-        return;
-      } else res.redirect("/auth/login");
-    } else {
-      await no_views_logged_in(req, res);
-    }
-  } else if (views.length === 1) {
-    const view = views[0];
-    const state = view.combine_state_and_default_state(req.query);
-    const resp = await view.run(state, { res, req });
-    const state_form = await view.get_state_form(state);
-
-    res.sendWrap(
-      `${view.name}`,
-      div(state_form ? renderForm(state_form, req.csrfToken()) : "", resp)
-    );
+  if (!isAuth) {
+    const hasUsers = await User.nonEmpty();
+    if (!hasUsers) {
+      res.redirect("/auth/create_first_user");
+      return;
+    } else res.redirect("/auth/login");
   } else {
-    const viewlis = views.map((v) => li(link(`/view/${v.name}`, v.name)));
-    res.sendWrap(req.__("Hello"), ul(viewlis));
+    await no_views_logged_in(req, res);
   }
 };

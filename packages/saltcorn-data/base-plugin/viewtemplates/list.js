@@ -7,30 +7,63 @@ const Workflow = require("../../models/workflow");
 const { mkTable, h, post_btn, link } = require("@saltcorn/markup");
 const { text, script, button } = require("@saltcorn/markup/tags");
 const pluralize = require("pluralize");
-const { removeEmptyStrings } = require("../../utils");
+const { removeEmptyStrings, removeDefaultColor } = require("../../utils");
 const {
   field_picker_fields,
   picked_fields_to_query,
   stateFieldsToWhere,
   initial_config_all_fields,
-  link_view,
-} = require("../../plugin-helper");
-const {
-  get_viewable_fields,
   stateToQueryString,
-} = require("./viewable_fields");
+  stateFieldsToQuery,
+  link_view,
+  getActionConfigFields,
+  readState,
+} = require("../../plugin-helper");
+const { get_viewable_fields } = require("./viewable_fields");
+const { getState } = require("../../db/state");
+const { get_async_expression_function } = require("../../models/expression");
+const db = require("../../db");
 
-const configuration_workflow = () =>
+const create_db_view = async (context) => {
+  const table = await Table.findOne({ id: context.table_id });
+  const fields = await table.getFields();
+  const { joinFields, aggregations } = picked_fields_to_query(
+    context.columns,
+    fields
+  );
+
+  const { sql } = await table.getJoinedQuery({
+    where: {},
+    joinFields,
+    aggregations,
+  });
+  const schema = db.getTenantSchemaPrefix();
+
+  await db.query(
+    `create or replace view ${schema}"${db.sqlsanitize(
+      context.viewname
+    )}" as ${sql};`
+  );
+};
+
+const configuration_workflow = (req) =>
   new Workflow({
+    onDone: async (ctx) => {
+      if (ctx.default_state._create_db_view) {
+        await create_db_view(ctx);
+      }
+      return ctx;
+    },
     steps: [
       {
-        name: "Columns",
+        name: req.__("Columns"),
         form: async (context) => {
           const table = await Table.findOne({ id: context.table_id });
           //console.log(context);
           const field_picker_repeat = await field_picker_fields({
             table,
             viewname: context.viewname,
+            req,
           });
           const create_views = await View.find_table_views_where(
             context.table_id,
@@ -40,7 +73,7 @@ const configuration_workflow = () =>
           );
           const create_view_opts = create_views.map((v) => v.name);
           return new Form({
-            blurb: "Specify the fields in the table to show",
+            blurb: req.__("Specify the fields in the table to show"),
             fields: [
               new FieldRepeat({
                 name: "columns",
@@ -50,9 +83,10 @@ const configuration_workflow = () =>
                 ? [
                     {
                       name: "view_to_create",
-                      label: "Use view to create",
-                      sublabel:
-                        "If user has write permission. Leave blank to have no link to create a new item",
+                      label: req.__("Use view to create"),
+                      sublabel: req.__(
+                        "If user has write permission. Leave blank to have no link to create a new item"
+                      ),
                       type: "String",
                       attributes: {
                         options: create_view_opts.join(),
@@ -60,9 +94,8 @@ const configuration_workflow = () =>
                     },
                     {
                       name: "create_view_display",
-                      label: "Display create view as",
+                      label: req.__("Display create view as"),
                       type: "String",
-                      class: "create_view_display",
                       required: true,
                       attributes: {
                         options: "Link,Embedded,Popup",
@@ -70,11 +103,12 @@ const configuration_workflow = () =>
                     },
                     {
                       name: "create_view_label",
-                      label: "Label for create",
-                      sublabel:
-                        "Label in link or button to create. Leave blank for a default label",
+                      label: req.__("Label for create"),
+                      sublabel: req.__(
+                        "Label in link or button to create. Leave blank for a default label"
+                      ),
                       type: "String",
-                      showIf: { ".create_view_display": ["Link", "Popup"] },
+                      showIf: { create_view_display: ["Link", "Popup"] },
                     },
                   ]
                 : []),
@@ -83,23 +117,16 @@ const configuration_workflow = () =>
         },
       },
       {
-        name: "Default state",
+        name: req.__("Default state"),
         contextField: "default_state",
-        onlyWhen: async (context) =>
-          context.columns.filter(
-            (column) => column.type === "Field" && column.state_field
-          ).length > 0,
         form: async (context) => {
           const table = await Table.findOne({ id: context.table_id });
           const table_fields = await table.getFields();
-          const formfields = context.columns
-            .filter((column) => column.type === "Field" && column.state_field)
-            .map((column) => {
-              const f = new Field(
-                table_fields.find((f) => f.name == column.field_name)
-              );
+          const formfields = table_fields
+            .filter((f) => !f.calculated || f.stored)
+            .map((f) => {
               return {
-                name: column.field_name,
+                name: f.name,
                 label: f.label,
                 type: f.type,
                 reftable_name: f.reftable_name,
@@ -109,9 +136,25 @@ const configuration_workflow = () =>
                 required: false,
               };
             });
+          formfields.push({
+            name: "_omit_state_form",
+            label: req.__("Omit search form"),
+            sublabel: req.__("Do not display the search filter form"),
+            type: "Bool",
+            default: true,
+          });
+          if (!db.isSQLite)
+            formfields.push({
+              name: "_create_db_view",
+              label: req.__("Create database view"),
+              sublabel: req.__(
+                "Create an SQL view in the database with the fields in this list"
+              ),
+              type: "Bool",
+            });
           const form = new Form({
             fields: formfields,
-            blurb: "Default search form values when first loaded",
+            blurb: req.__("Default search form values when first loaded"),
           });
           await form.fill_fkey_options(true);
           return form;
@@ -129,6 +172,7 @@ const get_state_fields = async (table_id, viewname, { columns }) => {
       if (tbl_fld) {
         const f = new Field(tbl_fld);
         f.required = false;
+        if (column.header_label) f.label = column.header_label;
         state_fields.push(f);
       }
     }
@@ -150,6 +194,10 @@ const run = async (
   //console.log({ columns, view_to_create, state });
   const table = await Table.findOne({ id: table_id });
   const fields = await table.getFields();
+  const role =
+    extraOpts && extraOpts.req && extraOpts.req.user
+      ? extraOpts.req.user.role_id
+      : 10;
   const { joinFields, aggregations } = picked_fields_to_query(columns, fields);
   const tfields = get_viewable_fields(
     viewname,
@@ -157,21 +205,33 @@ const run = async (
     fields,
     columns,
     false,
-    extraOpts.req.csrfToken()
+    extraOpts.req
   );
+  readState(stateWithId, fields);
   const { id, ...state } = stateWithId || {};
-  const qstate = await stateFieldsToWhere({ fields, state });
+  const where = await stateFieldsToWhere({ fields, state });
+  const q = await stateFieldsToQuery({ state, fields, prefix: "a." });
   const rows_per_page = 20;
+  if (!q.limit) q.limit = rows_per_page;
+  if (!q.orderBy) q.orderBy = "id";
+
   const current_page = parseInt(state._page) || 1;
+
+  if (table.ownership_field_id && role > table.min_role_read && extraOpts.req) {
+    const owner_field = fields.find((f) => f.id === table.ownership_field_id);
+    if (where[owner_field.name])
+      where[owner_field.name] = [
+        where[owner_field.name],
+        extraOpts.req.user ? extraOpts.req.user.id : -1,
+      ];
+    else
+      where[owner_field.name] = extraOpts.req.user ? extraOpts.req.user.id : -1;
+  }
   const rows = await table.getJoinedRows({
-    where: qstate,
+    where,
     joinFields,
     aggregations,
-    limit: rows_per_page,
-    offset: (current_page - 1) * rows_per_page,
-    ...(state._sortby && state._sortby !== "undefined"
-      ? { orderBy: state._sortby }
-      : { orderBy: "id" }),
+    ...q,
   });
 
   var page_opts =
@@ -180,22 +240,27 @@ const run = async (
       : { selectedId: id };
 
   if (rows.length === rows_per_page || current_page > 1) {
-    const nrows = await table.countRows(qstate);
+    const nrows = await table.countRows(where);
     if (nrows > rows_per_page || current_page > 1) {
       page_opts.pagination = {
         current_page,
         pages: Math.ceil(nrows / rows_per_page),
-        get_page_link: (n) => `javascript:gopage(${n})`,
+        get_page_link: (n) => `javascript:gopage(${n}, ${rows_per_page})`,
       };
     }
   }
-  const role =
-    extraOpts && extraOpts.req && extraOpts.req.user
-      ? extraOpts.req.user.role_id
-      : 10;
 
   var create_link = "";
-  if (view_to_create && role <= table.min_role_write) {
+  const user_id =
+    extraOpts && extraOpts.req.user ? extraOpts.req.user.id : null;
+  const about_user = fields.some(
+    (f) =>
+      f.reftable_name === "users" && state[f.name] && state[f.name] === user_id
+  );
+  if (
+    view_to_create &&
+    (role <= table.min_role_write || (table.ownership_field_id && about_user))
+  ) {
     if (create_view_display === "Embedded") {
       const create_view = await View.findOne({ name: view_to_create });
       create_link = await create_view.run(state, extraOpts);
@@ -211,14 +276,56 @@ const run = async (
   return mkTable(tfields, rows, page_opts) + create_link;
 };
 
+const run_action = async (
+  table_id,
+  viewname,
+  { columns, layout },
+  body,
+  { req, res }
+) => {
+  const col = columns.find(
+    (c) =>
+      c.type === "Action" &&
+      c.action_name === body.action_name &&
+      body.action_name
+  );
+
+  const table = await Table.findOne({ id: table_id });
+  const row = await table.getRow({ id: body.id });
+  const state_action = getState().actions[col.action_name];
+  const configuration = {};
+  const cfgFields = await getActionConfigFields(state_action, table);
+  cfgFields.forEach(({ name }) => {
+    configuration[name] = col[name];
+  });
+  try {
+    const result = await state_action.run({
+      configuration,
+      table,
+      row,
+      user: req.user,
+    });
+    return { json: { success: "ok", ...(result || {}) } };
+  } catch (e) {
+    return { json: { error: e.message || e } };
+  }
+};
+
 module.exports = {
   name: "List",
+  description:
+    "Display multiple rows from a table in a grid with columns you specify",
   configuration_workflow,
   run,
   view_quantity: "Many",
   get_state_fields,
   initial_config,
-  display_state_form: true,
-  default_state_form: ({ default_state }) =>
-    default_state && removeEmptyStrings(default_state),
+  routes: { run_action },
+  display_state_form: (opts) =>
+    !(opts && opts.default_state && opts.default_state._omit_state_form),
+  default_state_form: ({ default_state }) => {
+    if (!default_state) return default_state;
+    const { _omit_state_form, _create_db_view, ...ds } = default_state;
+    return ds && removeDefaultColor(removeEmptyStrings(ds));
+  },
 };

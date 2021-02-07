@@ -1,20 +1,21 @@
-const Field = require("../../models/field");
-const FieldRepeat = require("../../models/fieldrepeat");
 const Table = require("../../models/table");
 const Form = require("../../models/form");
 const View = require("../../models/view");
 const Workflow = require("../../models/workflow");
 const { text, div, h4, h6 } = require("@saltcorn/markup/tags");
 const { renderForm, tabs } = require("@saltcorn/markup");
-const { mkTable } = require("@saltcorn/markup");
-const { get_child_views, get_parent_views } = require("../../plugin-helper");
+const {
+  get_child_views,
+  get_parent_views,
+  readState,
+} = require("../../plugin-helper");
 const { splitUniques } = require("./viewable_fields");
 
-const configuration_workflow = () =>
+const configuration_workflow = (req) =>
   new Workflow({
     steps: [
       {
-        name: "Views",
+        name: req.__("Views"),
         form: async (context) => {
           const list_views = await View.find_table_views_where(
             context.table_id,
@@ -36,7 +37,7 @@ const configuration_workflow = () =>
             fields: [
               {
                 name: "list_view",
-                label: "List View",
+                label: req.__("List View"),
                 type: "String",
                 required: false,
                 attributes: {
@@ -45,19 +46,26 @@ const configuration_workflow = () =>
               },
               {
                 name: "show_view",
-                label: "Show View",
+                label: req.__("Show View"),
                 type: "String",
                 required: false,
                 attributes: {
                   options: show_view_opts.join(),
                 },
               },
+              {
+                name: "_omit_state_form",
+                label: req.__("Omit search form"),
+                sublabel: req.__("Do not display the search filter form"),
+                type: "Bool",
+                default: true,
+              },
             ],
           });
         },
       },
       {
-        name: "Subtables",
+        name: req.__("Subtables"),
         contextField: "subtables",
         form: async (context) => {
           const tbl = await Table.findOne({ id: context.table_id });
@@ -84,8 +92,9 @@ const configuration_workflow = () =>
           }
           return new Form({
             fields,
-            blurb:
-              "Which related tables would you like to show in sub-lists below the selected item?",
+            blurb: req.__(
+              "Which related tables would you like to show in sub-lists below the selected item?"
+            ),
           });
         },
       },
@@ -120,6 +129,7 @@ const run = async (
 ) => {
   const table = await Table.findOne({ id: table_id });
   const fields = await table.getFields();
+  readState(state, fields);
 
   var lresp;
   if (list_view) {
@@ -149,6 +159,7 @@ const run = async (
     if (state.id) id = state.id;
     else {
       myrow = await table.getRow(uniques);
+      if (!myrow) return `Not found`;
       id = myrow.id;
     }
     for (const relspec of Object.keys(subtables || {})) {
@@ -209,8 +220,11 @@ const run = async (
 
 module.exports = {
   name: "ListShowList",
+  description:
+    "Combine an optional list view on the left with displays on the right of a single selected row, with views of related rows from different tables underneath",
   configuration_workflow,
   run,
   get_state_fields,
-  display_state_form: ({ list_view }) => !!list_view,
+  display_state_form: ({ list_view, _omit_state_form }) =>
+    !!list_view && !_omit_state_form,
 };

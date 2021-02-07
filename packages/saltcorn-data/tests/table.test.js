@@ -1,4 +1,5 @@
 const Table = require("../models/table");
+const TableConstraint = require("../models/table_constraints");
 const Field = require("../models/field");
 const View = require("../models/view");
 const db = require("../db");
@@ -6,6 +7,8 @@ const { getState } = require("../db/state");
 getState().registerPlugin("base", require("../base-plugin"));
 const fs = require("fs").promises;
 const { rick_file } = require("./mocks");
+const { mockReqRes } = require("./mocks");
+const { findAllWithTableName, runTableTriggers } = require("../models/trigger");
 
 afterAll(db.close);
 beforeAll(async () => {
@@ -90,6 +93,11 @@ describe("Table create", () => {
       (async () => await db.selectOne("mytable1", { id: 789 }))()
     ).rejects.toThrow(Error);
   });
+  it("should get distinct values", async () => {
+    const table = await Table.findOne({ name: "mytable1" });
+    const vs = await table.distinctValues("height1");
+    expect(vs).toEqual([7]);
+  });
   it("should delete", async () => {
     const table = await Table.findOne({ name: "mytable1" });
     await table.delete();
@@ -125,6 +133,24 @@ describe("Table get data", () => {
     });
     expect(michaels.length).toStrictEqual(1);
     expect(michaels[0].favbook).toBe(2);
+  });
+  it("should get rows in id range", async () => {
+    const patients = await Table.findOne({ name: "patients" });
+    const rows = await patients.getRows({ id: [{ gt: 0 }, { lt: 10 }] });
+    expect(rows.length).toStrictEqual(2);
+  });
+  it("should get rows by subselect", async () => {
+    const books = await Table.findOne({ name: "books" });
+    const nrows = await books.countRows({
+      id: {
+        inSelect: {
+          table: "patients",
+          field: "favbook",
+          where: { author: "Leo Tolstoy" },
+        },
+      },
+    });
+    expect(nrows).toStrictEqual(1);
   });
   it("should get joined rows with arbitrary fieldnames", async () => {
     const patients = await Table.findOne({ name: "patients" });
@@ -173,6 +199,17 @@ describe("Table get data", () => {
     });
     expect(michaels.length).toStrictEqual(2);
     expect(Math.round(michaels[0].avg_temp)).toBe(38);
+  });
+  it("should get double joined rows", async () => {
+    const readings = await Table.findOne({ name: "readings" });
+    const reads = await readings.getJoinedRows({
+      orderBy: "id",
+      joinFields: {
+        author: { ref: "patient_id", through: "favbook", target: "author" },
+      },
+    });
+    expect(reads.length).toStrictEqual(3);
+    expect(reads[0].author).toBe("Herman Melville");
   });
   it("should get joined rows with aggregations and joins", async () => {
     const patients = await Table.findOne({ name: "patients" });
@@ -301,6 +338,38 @@ Gordon Kane, 217`;
     expect(!!table).toBe(true);
     const impres = await table.import_csv_file(fnm);
     expect(impres).toEqual({ error: "Required field missing: Pages" });
+  });
+  it("fail on strings in ints", async () => {
+    const csv = `author,Pages
+Leonardo Boff, 99
+David MacKay, ITILA`;
+    const fnm = "/tmp/test1.csv";
+    await fs.writeFile(fnm, csv);
+    const table = await Table.create("books_not_req_pages", {
+      min_role_read: 10,
+    });
+    await Field.create({
+      table,
+      name: "author",
+      label: "Author",
+      type: "String",
+      required: true,
+    });
+    await Field.create({
+      table,
+      name: "pages",
+      label: "Pages",
+      type: "Integer",
+      attributes: { min: 0 },
+    });
+    expect(!!table).toBe(true);
+    const impres = await table.import_csv_file(fnm);
+    expect(impres).toEqual({
+      success:
+        "Imported 1 rows into table books_not_req_pages. Rejected 1 rows.",
+    });
+    const rows = await table.getRows({ author: "David MacKay" });
+    expect(rows.length).toBe(0);
   });
   it("should create by importing", async () => {
     const csv = `item,cost,count, vatable
@@ -563,7 +632,6 @@ describe("Table and view deletion ", () => {
       viewtemplate: "List",
       configuration: { columns: [], default_state: {} },
       min_role: 10,
-      on_root_page: true,
     });
     let error;
     try {
@@ -594,5 +662,121 @@ describe("Table with date", () => {
     var dif = new Date(rows[0].time).getTime() - new Date().getTime();
 
     expect(Math.abs(dif)).toBeLessThanOrEqual(1000);
+  });
+});
+describe("Tables with name clashes", () => {
+  it("should create tables", async () => {
+    //db.set_sql_logging()
+    const cars = await Table.create("TableClashCar");
+    const persons = await Table.create("TableClashPerson");
+    await Field.create({
+      table: persons,
+      name: "name",
+      type: "String",
+    });
+    await Field.create({
+      table: cars,
+      name: "name",
+      type: "String",
+    });
+    await Field.create({
+      table: cars,
+      name: "owner",
+      type: "Key to TableClashPerson",
+    });
+    const sally = await persons.insertRow({ name: "Sally" });
+    await cars.insertRow({ name: "Mustang", owner: sally });
+  });
+  it("should query", async () => {
+    const cars = await Table.findOne({ name: "TableClashCar" });
+
+    const rows = await cars.getJoinedRows({
+      joinFields: {
+        owner_name: { ref: "owner", target: "name" },
+      },
+    });
+    expect(rows[0]).toEqual({
+      id: 1,
+      name: "Mustang",
+      owner: 1,
+      owner_name: "Sally",
+    });
+  });
+
+  it("should show list view", async () => {
+    const cars = await Table.findOne({ name: "TableClashCar" });
+    const v = await View.create({
+      table_id: cars.id,
+      name: "patientlist",
+      viewtemplate: "List",
+      configuration: {
+        columns: [
+          { type: "Field", field_name: "name" },
+          { type: "JoinField", join_field: "owner.name" },
+        ],
+      },
+      min_role: 10,
+    });
+    const res = await v.run({}, mockReqRes);
+    expect(res).toContain("Mustang");
+    expect(res).toContain("Sally");
+  });
+  it("should show show view", async () => {
+    const cars = await Table.findOne({ name: "TableClashCar" });
+    const v = await View.create({
+      table_id: cars.id,
+      name: "patientlist",
+      viewtemplate: "Show",
+      configuration: {
+        columns: [
+          { type: "Field", field_name: "name" },
+          { type: "JoinField", join_field: "owner.name" },
+        ],
+        layout: {
+          above: [
+            { type: "field", fieldview: "show", field_name: "name" },
+            { type: "join_field", join_field: "owner.name" },
+          ],
+        },
+      },
+      min_role: 10,
+    });
+    const res = await v.run({ id: 1 }, mockReqRes);
+    expect(res).toContain("Mustang");
+    expect(res).toContain("Sally");
+  });
+});
+describe("Table joint unique constraint", () => {
+  it("should create table", async () => {
+    const table = await Table.findOne({ name: "books" });
+    const rows = await table.getRows();
+    const { id, ...row0 } = rows[0];
+    const tc = await TableConstraint.create({
+      table_id: table.id,
+      type: "Unique",
+      configuration: { fields: ["author", "pages"] },
+    });
+    const res = await table.tryInsertRow(row0);
+    expect(!!res.error).toBe(true);
+    await tc.delete();
+    const res1 = await table.tryInsertRow(row0);
+    expect(!!res1.error).toBe(false);
+  });
+});
+describe("Table with row ownership", () => {
+  it("should create and delete table", async () => {
+    const persons = await Table.create("TableOwned");
+    await Field.create({
+      table: persons,
+      name: "name",
+      type: "String",
+    });
+    const owner = await Field.create({
+      table: persons,
+      name: "owner",
+      type: "Key to users",
+    });
+    await persons.update({ ownership_field_id: owner.id });
+    await persons.delete();
   });
 });
